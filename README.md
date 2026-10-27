@@ -36,7 +36,10 @@ colour picked:
   titles; a file's first title names it. A store book's chapters are encrypted, but these
   files are not (none of a measured book's 57 encrypted files was one). A book not on this Mac
   has no chapter names.
-- **A series** is a library row of its own (content type 5) and is left out of the books.
+- **A series** is a library row of its own (content type 5) holding the books of it the reader has;
+  the series' other volumes come from the store as rows in state 5 — not the reader's. Both are
+  left out, and a book in a series is in its series' collections too (that is where Books shows it:
+  a library of 2 series and 2 samples is 4 books, all under Books).
 
 ## Writing
 
@@ -45,7 +48,7 @@ Nothing here writes. Books has no AppleScript dictionary for annotations.
 ## Tested
 
 7 tests against synthetic stores with the real tables and a tiny EPUB folder — no one's library
-is read. Every rule broken on purpose is caught (18 of 18 mutations). Checked by hand on a book
+is read. Every rule broken on purpose is caught (21 of 21 mutations). Checked by hand on a book
 annotated for the test: six colours and an underline, notes, two bookmarks (and a removed
 one), chapter names and reading order all read.
 

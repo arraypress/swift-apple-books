@@ -102,15 +102,18 @@ final class BooksTests: XCTestCase {
             <navPoint><navLabel><text>Low Tide</text></navLabel><content src="ch2.xhtml"/></navPoint></navMap></ncx>
             """.utf8).write(to: epub.appendingPathComponent("OEBPS/toc.ncx"))
         run(folder.appendingPathComponent("BKLibrary/BKLibrary-1.sqlite"), [
-            "CREATE TABLE ZBKLIBRARYASSET (Z_PK INTEGER PRIMARY KEY, ZASSETID TEXT, ZTITLE TEXT, ZAUTHOR TEXT, ZKIND TEXT, ZGENRE TEXT, ZREADINGPROGRESS REAL, ZISFINISHED INTEGER, ZISSAMPLE INTEGER, ZLASTOPENDATE REAL, ZDATEFINISHED REAL, ZPATH TEXT, ZCONTENTTYPE INTEGER, ZISHIDDEN INTEGER, ZSORTTITLE TEXT)",
+            "CREATE TABLE ZBKLIBRARYASSET (Z_PK INTEGER PRIMARY KEY, ZASSETID TEXT, ZTITLE TEXT, ZAUTHOR TEXT, ZKIND TEXT, ZGENRE TEXT, ZREADINGPROGRESS REAL, ZISFINISHED INTEGER, ZISSAMPLE INTEGER, ZLASTOPENDATE REAL, ZDATEFINISHED REAL, ZPATH TEXT, ZCONTENTTYPE INTEGER, ZISHIDDEN INTEGER, ZSORTTITLE TEXT, ZSTATE INTEGER, ZSERIESCONTAINER INTEGER)",
             "CREATE TABLE ZBKCOLLECTION (Z_PK INTEGER PRIMARY KEY, ZCOLLECTIONID TEXT, ZTITLE TEXT, ZDELETEDFLAG INTEGER, ZHIDDEN INTEGER)",
             "CREATE TABLE ZBKCOLLECTIONMEMBER (Z_PK INTEGER PRIMARY KEY, ZASSET INTEGER, ZCOLLECTION INTEGER)",
-            "INSERT INTO ZBKLIBRARYASSET VALUES (1, '100', 'The Keeper', 'Ada Moss', 'ebook', 'Fiction', 0.25, 0, 0, 800000000, NULL, '\(epub.path)', 1, 0, 'keeper')",
-            "INSERT INTO ZBKLIBRARYASSET VALUES (2, '200', 'Salt Roads', 'Ben Hale', NULL, NULL, 1.0, 1, 0, 790000000, 795000000, NULL, 1, 0, 'salt')",
-            "INSERT INTO ZBKLIBRARYASSET VALUES (3, '300', 'Coast Trilogy', 'Ada Moss', NULL, NULL, 0, 0, 0, 810000000, NULL, NULL, 5, 0, 'coast')",
+            "INSERT INTO ZBKLIBRARYASSET VALUES (1, '100', 'The Keeper', 'Ada Moss', 'ebook', 'Fiction', 0.25, 0, 0, 800000000, NULL, '\(epub.path)', 1, 0, 'keeper', 1, 3)",
+            "INSERT INTO ZBKLIBRARYASSET VALUES (2, '200', 'Salt Roads', 'Ben Hale', NULL, NULL, 1.0, 1, 0, 790000000, 795000000, NULL, 1, 0, 'salt', 1, NULL)",
+            "INSERT INTO ZBKLIBRARYASSET VALUES (4, '400', 'The Keeper Returns', 'Ada Moss', NULL, NULL, 0, 0, 0, 805000000, NULL, NULL, 1, 0, 'keeper2', 5, 3)",
+            "INSERT INTO ZBKLIBRARYASSET VALUES (3, '300', 'Coast Trilogy', 'Ada Moss', NULL, NULL, 0, 0, 0, 810000000, NULL, NULL, 5, 0, 'coast', 5, NULL)",
             "INSERT INTO ZBKCOLLECTION VALUES (1, 'All_Collection_ID', 'Library', 0, 0)",
             "INSERT INTO ZBKCOLLECTION VALUES (2, 'Finished_Collection_ID', 'Finished', 0, 0)",
             "INSERT INTO ZBKCOLLECTION VALUES (3, 'X', 'Old shelf', 1, 0)",
+            "INSERT INTO ZBKCOLLECTION VALUES (4, 'Books_Collection_ID', 'Books', 0, 0)",
+            "INSERT INTO ZBKCOLLECTIONMEMBER VALUES (5, 3, 4)",
             "INSERT INTO ZBKCOLLECTIONMEMBER VALUES (1, 1, 1)", "INSERT INTO ZBKCOLLECTIONMEMBER VALUES (2, 2, 1)",
             "INSERT INTO ZBKCOLLECTIONMEMBER VALUES (3, 2, 2)", "INSERT INTO ZBKCOLLECTIONMEMBER VALUES (4, 2, 3)",
         ])
@@ -129,13 +132,16 @@ final class BooksTests: XCTestCase {
     func testBooksAreReadWithTheirCollections() throws {
         let store = try makeStore()
         let books = store.books()
-        XCTAssertEqual(books.map(\.title), ["The Keeper", "Salt Roads"], "most recently opened first; a series row left out")
+        XCTAssertEqual(books.map(\.title), ["The Keeper", "Salt Roads"],
+                       "most recently opened first; a series row and the series' volumes from the store left out")
+        XCTAssertEqual(books[0].collections, ["Books"], "a book in a series is in its series' collections")
         XCTAssertEqual(books[1].collections, ["Finished"], "the whole library and deleted collections are not listed")
         XCTAssertTrue(books[1].isFinished)
         XCTAssertEqual(books[0].progress, 0.25)
         XCTAssertNotNil(books[0].file)
         XCTAssertNil(books[1].file, "not on this Mac")
-        XCTAssertEqual(store.collections().map(\.title), ["Library", "Finished"])
+        XCTAssertEqual(store.collections().map(\.title), ["Library", "Finished", "Books"])
+        XCTAssertEqual(BooksStore.merged(["Downloaded", "Books"], ["Books", "Library"]), ["Downloaded", "Books", "Library"])
         XCTAssertEqual(try store.book("keeper").id, "100", "words only one title holds")
         XCTAssertEqual(try store.book("200").title, "Salt Roads")
         XCTAssertThrowsError(try store.book("t"), "words two titles hold")

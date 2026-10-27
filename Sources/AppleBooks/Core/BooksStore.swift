@@ -9,7 +9,10 @@
 //  opened read-only: `BKLibrary/*.sqlite` (the books, ZBKLIBRARYASSET; the
 //  collections, ZBKCOLLECTION and its members) and `AEAnnotation/*.sqlite`
 //  (highlights, notes and bookmarks, ZAEANNOTATION, joined by asset id).
-//  A series is a library row of its own (content type 5) and is left out.
+//  A series is a library row of its own (content type 5) holding the books
+//  of it the reader has; the series' other volumes come from the store as
+//  rows in state 5, not the reader's. Both are left out, and a book in a
+//  series is in its series' collections too (that is where Books shows it).
 //  Chapters are named from each downloaded book's table of contents
 //  (EPUBContents). The container is protected: the app running this needs
 //  Full Disk Access. Nothing is written.
@@ -75,8 +78,8 @@ public final class BooksStore {
         }
         return SQLiteRows.rows(library, """
             SELECT Z_PK, ZASSETID, ZTITLE, ZAUTHOR, ZKIND, ZGENRE, ZREADINGPROGRESS, ZISFINISHED, ZISSAMPLE, ZLASTOPENDATE,
-                   ZDATEFINISHED, ZPATH FROM ZBKLIBRARYASSET
-            WHERE COALESCE(ZCONTENTTYPE, 1) != 5 AND COALESCE(ZISHIDDEN, 0) = 0
+                   ZDATEFINISHED, ZPATH, ZSERIESCONTAINER FROM ZBKLIBRARYASSET
+            WHERE COALESCE(ZCONTENTTYPE, 1) != 5 AND COALESCE(ZSTATE, 1) != 5 AND COALESCE(ZISHIDDEN, 0) = 0
             ORDER BY ZLASTOPENDATE DESC, ZSORTTITLE;
             """).compactMap { row -> Book? in
             guard let pk = row[0] as? Int64, let id = row[1] as? String else { return nil }
@@ -84,7 +87,7 @@ public final class BooksStore {
             return Book(id: id, title: row[2] as? String ?? "Untitled", author: row[3] as? String, kind: row[4] as? String,
                         genre: row[5] as? String, progress: row[6] as? Double ?? 0, isFinished: (row[7] as? Int64 ?? 0) != 0,
                         isSample: (row[8] as? Int64 ?? 0) != 0, lastOpened: SQLiteRows.date(row[9]), finished: SQLiteRows.date(row[10]),
-                        collections: collections[pk] ?? [], file: file)
+                        collections: Self.merged(collections[pk] ?? [], (row[12] as? Int64).flatMap { collections[$0] } ?? []), file: file)
         }
     }
 
@@ -170,6 +173,11 @@ public final class BooksStore {
                 ? AppleBooksError.permissionDenied(url) : AppleBooksError.databaseError(message)
         }
         return opened
+    }
+
+    /// A book's own collections, then its series' it is not already in.
+    static func merged(_ own: [String], _ series: [String]) -> [String] {
+        own + series.filter { !own.contains($0) }
     }
 
     /// Text trimmed, or nil when there is none.
