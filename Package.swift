@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "swift-apple-books",
-    // SQLite3 is in the OS; nothing is vendored and nothing is fetched. macOS
+    // SQLite is read through swift-sqlite-reader; nothing is vendored. macOS
     // only — Books' stores on a Mac are the ones this reads.
     platforms: [
         .macOS(.v14)
@@ -11,8 +11,13 @@ let package = Package(
     products: [
         .library(name: "AppleBooks", targets: ["AppleBooks"]),
     ],
+    dependencies: [
+        .package(url: "https://github.com/arraypress/swift-sqlite-reader.git", from: "0.1.0"),
+    ],
     targets: [
-        .target(name: "AppleBooks"),
+        .target(name: "AppleBooks", dependencies: [
+            .product(name: "SQLiteReader", package: "swift-sqlite-reader"),
+        ]),
         .testTarget(name: "AppleBooksTests", dependencies: ["AppleBooks"]),
     ]
 )

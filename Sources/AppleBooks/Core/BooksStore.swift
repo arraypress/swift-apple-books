@@ -6,7 +6,7 @@
 //
 //  The Books library and its annotations, read from Books' own stores — not
 //  by driving the app. Two Core Data SQLite files in Books' container,
-//  opened read-only: `BKLibrary/*.sqlite` (the books, ZBKLIBRARYASSET; the
+//  opened read-only through swift-sqlite-reader: `BKLibrary/*.sqlite` (the books, ZBKLIBRARYASSET; the
 //  collections, ZBKCOLLECTION and its members) and `AEAnnotation/*.sqlite`
 //  (highlights, notes and bookmarks, ZAEANNOTATION, joined by asset id).
 //  A series is a library row of its own (content type 5) holding the books
@@ -19,7 +19,7 @@
 //
 
 import Foundation
-import SQLite3
+import SQLiteReader
 
 /// The Books library, read-only.
 ///
@@ -36,8 +36,8 @@ public final class BooksStore {
             .appendingPathComponent("Library/Containers/com.apple.iBooksX/Data/Documents")
     }
 
-    private let library: OpaquePointer
-    private let notes: OpaquePointer?
+    private let library: SQLiteReader
+    private let notes: SQLiteReader?
 
     /// Opens both stores, read-only.
     ///
@@ -53,41 +53,35 @@ public final class BooksStore {
             throw AppleBooksError.storeNotFound(folder)
         }
         library = try Self.open(libraryFile)
-        guard !SQLiteRows.rows(library, "SELECT count(*) FROM ZBKLIBRARYASSET;").isEmpty else {
-            sqlite3_close(library)
+        guard !Self.rows(library, "SELECT count(*) FROM ZBKLIBRARYASSET;").isEmpty else {
             throw AppleBooksError.permissionDenied(libraryFile)
         }
         notes = Self.store(in: folder.appendingPathComponent("AEAnnotation")).flatMap { try? Self.open($0) }
-    }
-
-    deinit {
-        sqlite3_close(library)
-        if let notes { sqlite3_close(notes) }
     }
 
     // MARK: - Books
 
     /// Every book, most recently opened first.
     public func books() -> [Book] {
-        var collections: [Int64: [String]] = [:]
-        for row in SQLiteRows.rows(library, """
+        var collections: [Int: [String]] = [:]
+        for row in Self.rows(library, """
             SELECT m.ZASSET, c.ZTITLE FROM ZBKCOLLECTIONMEMBER m JOIN ZBKCOLLECTION c ON c.Z_PK = m.ZCOLLECTION
             WHERE COALESCE(c.ZDELETEDFLAG, 0) = 0 AND c.ZCOLLECTIONID != 'All_Collection_ID' ORDER BY c.Z_PK;
             """) {
-            if let asset = row[0] as? Int64, let title = row[1] as? String { collections[asset, default: []].append(title) }
+            if let asset = row[0].int, let title = row[1].string { collections[asset, default: []].append(title) }
         }
-        return SQLiteRows.rows(library, """
+        return Self.rows(library, """
             SELECT Z_PK, ZASSETID, ZTITLE, ZAUTHOR, ZKIND, ZGENRE, ZREADINGPROGRESS, ZISFINISHED, ZISSAMPLE, ZLASTOPENDATE,
                    ZDATEFINISHED, ZPATH, ZSERIESCONTAINER FROM ZBKLIBRARYASSET
             WHERE COALESCE(ZCONTENTTYPE, 1) != 5 AND COALESCE(ZSTATE, 1) != 5 AND COALESCE(ZISHIDDEN, 0) = 0
             ORDER BY ZLASTOPENDATE DESC, ZSORTTITLE;
             """).compactMap { row -> Book? in
-            guard let pk = row[0] as? Int64, let id = row[1] as? String else { return nil }
-            let file = (row[11] as? String).map { URL(fileURLWithPath: $0) }.flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
-            return Book(id: id, title: row[2] as? String ?? "Untitled", author: row[3] as? String, kind: row[4] as? String,
-                        genre: row[5] as? String, progress: row[6] as? Double ?? 0, isFinished: (row[7] as? Int64 ?? 0) != 0,
-                        isSample: (row[8] as? Int64 ?? 0) != 0, lastOpened: SQLiteRows.date(row[9]), finished: SQLiteRows.date(row[10]),
-                        collections: Self.merged(collections[pk] ?? [], (row[12] as? Int64).flatMap { collections[$0] } ?? []), file: file)
+            guard let pk = row[0].int, let id = row[1].string else { return nil }
+            let file = row[11].string.map { URL(fileURLWithPath: $0) }.flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
+            return Book(id: id, title: row[2].string ?? "Untitled", author: row[3].string, kind: row[4].string,
+                        genre: row[5].string, progress: row[6].double ?? 0, isFinished: row[7].bool ?? false,
+                        isSample: row[8].bool ?? false, lastOpened: Self.date(row[9]), finished: Self.date(row[10]),
+                        collections: Self.merged(collections[pk] ?? [], row[12].int.flatMap { collections[$0] } ?? []), file: file)
         }
     }
 
@@ -102,12 +96,12 @@ public final class BooksStore {
 
     /// The collections, Books' own first.
     public func collections() -> [BookCollection] {
-        SQLiteRows.rows(library, """
+        Self.rows(library, """
             SELECT c.ZCOLLECTIONID, c.ZTITLE, (SELECT count(*) FROM ZBKCOLLECTIONMEMBER m WHERE m.ZCOLLECTION = c.Z_PK)
             FROM ZBKCOLLECTION c WHERE COALESCE(c.ZDELETEDFLAG, 0) = 0 AND COALESCE(c.ZHIDDEN, 0) = 0 ORDER BY c.Z_PK;
             """).compactMap { row in
-            guard let id = row[0] as? String, let title = row[1] as? String else { return nil }
-            return BookCollection(id: id, title: title, count: Int(row[2] as? Int64 ?? 0))
+            guard let id = row[0].string, let title = row[1].string else { return nil }
+            return BookCollection(id: id, title: title, count: row[2].int ?? 0)
         }
     }
 
@@ -125,21 +119,21 @@ public final class BooksStore {
         if let book { clauses.append("ZANNOTATIONASSETID = '\(book.replacingOccurrences(of: "'", with: "''"))'") }
         let files = Dictionary(books().map { ($0.id, $0.file) }, uniquingKeysWith: { first, _ in first })
         var chapters: [String: [String: String]] = [:]
-        let found = SQLiteRows.rows(notes, """
+        let found = Self.rows(notes, """
             SELECT ZANNOTATIONUUID, ZANNOTATIONASSETID, ZANNOTATIONTYPE, ZANNOTATIONSTYLE, ZANNOTATIONISUNDERLINE,
                    ZANNOTATIONSELECTEDTEXT, ZANNOTATIONREPRESENTATIVETEXT, ZANNOTATIONNOTE, ZANNOTATIONLOCATION,
                    ZANNOTATIONCREATIONDATE, ZANNOTATIONMODIFICATIONDATE, ZANNOTATIONDELETED, Z_PK
             FROM ZAEANNOTATION WHERE \(clauses.joined(separator: " AND "));
             """).compactMap { row -> BookAnnotation? in
-            guard let asset = row[1] as? String, let kind = AnnotationStyles.kind(type: Int(row[2] as? Int64 ?? -1)) else { return nil }
-            let location = row[8] as? String
+            guard let asset = row[1].string, let kind = AnnotationStyles.kind(type: row[2].int ?? -1) else { return nil }
+            let location = row[8].string
             if chapters[asset] == nil { chapters[asset] = (files[asset] ?? nil).map(EPUBContents.chapters) ?? [:] }
             let chapter = location.flatMap(EPUBLocation.chapterID).flatMap { chapters[asset]?[$0] }
             return BookAnnotation(
-                id: row[0] as? String ?? String(row[12] as? Int64 ?? 0), book: asset, kind: kind,
-                color: kind == .highlight ? AnnotationStyles.color(style: Int(row[3] as? Int64 ?? 0), underline: (row[4] as? Int64 ?? 0) != 0) : nil,
+                id: row[0].string ?? String(row[12].int ?? 0), book: asset, kind: kind,
+                color: kind == .highlight ? AnnotationStyles.color(style: row[3].int ?? 0, underline: row[4].bool ?? false) : nil,
                 text: Self.words(row[5]), context: Self.words(row[6]), note: Self.words(row[7]), chapter: chapter, location: location,
-                created: SQLiteRows.date(row[9]), modified: SQLiteRows.date(row[10]), isDeleted: (row[11] as? Int64 ?? 0) != 0)
+                created: Self.date(row[9]), modified: Self.date(row[10]), isDeleted: row[11].bool ?? false)
         }
         return found.sorted { a, b in
             a.book != b.book ? a.book < b.book : EPUBLocation.precedes(a.location, b.location)
@@ -163,16 +157,20 @@ public final class BooksStore {
             .filter { $0.pathExtension == "sqlite" }.sorted { $0.lastPathComponent < $1.lastPathComponent }.first
     }
 
-    static func open(_ url: URL) throws -> OpaquePointer {
-        var opened: OpaquePointer?
-        guard sqlite3_open_v2("file:\(url.path)?mode=ro", &opened, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil) == SQLITE_OK,
-              let opened else {
-            let message = opened.map { String(cString: sqlite3_errmsg($0)) } ?? "could not open"
-            sqlite3_close(opened)
-            throw message.lowercased().contains("authoriz") || message.lowercased().contains("permission")
-                ? AppleBooksError.permissionDenied(url) : AppleBooksError.databaseError(message)
-        }
-        return opened
+    /// A store opened read-only.
+    static func open(_ url: URL) throws -> SQLiteReader {
+        do { return try SQLiteReader(path: url, opening: .readOnly) } catch { throw AppleBooksError(error, store: url) }
+    }
+
+    /// Every row `sql` returns; none when it cannot run — the queries here are fixed text.
+    static func rows(_ store: SQLiteReader, _ sql: String) -> [SQLiteRow] {
+        (try? store.rows(sql)) ?? []
+    }
+
+    /// A Core Data date column: seconds since 2001, any value (this library's
+    /// own rule, not `appleDate`, which reads 0 as "never").
+    static func date(_ value: SQLiteValue) -> Date? {
+        value.double.map(Date.init(timeIntervalSinceReferenceDate:))
     }
 
     /// A book's own collections, then its series' it is not already in.
@@ -181,8 +179,8 @@ public final class BooksStore {
     }
 
     /// Text trimmed, or nil when there is none.
-    static func words(_ value: Any?) -> String? {
-        guard let text = (value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
+    static func words(_ value: SQLiteValue) -> String? {
+        guard let text = value.string?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
         return text
     }
 }
